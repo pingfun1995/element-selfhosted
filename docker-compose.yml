@@ -1,0 +1,307 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    pids_limit: 100
+    environment:
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: synapse
+      POSTGRES_INITDB_ARGS: "--lc-collate C --lc-ctype C --encoding UTF8"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  synapse:
+    image: matrixdotorg/synapse:latest
+    restart: unless-stopped
+    mem_limit: 2g
+    cpus: 2.0
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - CHOWN
+    pids_limit: 200
+    volumes:
+      - ./data/synapse:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8008/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  element-web:
+    image: vectorim/element-web:latest
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - SETUID
+      - SETGID
+      - CHOWN
+      - DAC_OVERRIDE
+    pids_limit: 50
+    volumes:
+      - ./element-web/config.json:/app/config.json:ro
+    networks:
+      - internal
+
+  synapse-admin:
+    image: awesometechnologies/synapse-admin:latest
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - SETUID
+      - SETGID
+      - CHOWN
+      - DAC_OVERRIDE
+    pids_limit: 50
+    networks:
+      - internal
+
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - NET_RAW
+      - SETUID
+      - SETGID
+    pids_limit: 100
+    network_mode: host
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    command: -c /etc/coturn/turnserver.conf
+
+  nginx:
+    image: openresty/openresty:alpine
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - SETUID
+      - SETGID
+      - CHOWN
+      - DAC_OVERRIDE
+    pids_limit: 100
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8444:8444"
+      - "8448:8448"
+    volumes:
+      - ./nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
+      - ./nginx/certs:/usr/local/openresty/nginx/certs:ro
+      - ./nginx/static:/usr/local/openresty/nginx/static:ro
+    depends_on:
+      - synapse
+      - element-web
+      - synapse-admin
+    networks:
+      - internal
+
+  jitsi-web:
+    image: jitsi/web:stable
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - SETUID
+      - SETGID
+      - CHOWN
+    pids_limit: 100
+    environment:
+      - PUBLIC_URL=https://${DOMAIN}:8448
+      - XMPP_SERVER=jitsi-prosody
+      - XMPP_DOMAIN=meet.jitsi
+      - XMPP_AUTH_DOMAIN=auth.meet.jitsi
+      - XMPP_MUC_DOMAIN=muc.meet.jitsi
+      - XMPP_INTERNAL_MUC_DOMAIN=internal-muc.meet.jitsi
+      - XMPP_GUEST_DOMAIN=guest.meet.jitsi
+      - XMPP_BOSH_URL_BASE=http://jitsi-prosody:5280
+      - ENABLE_AUTH=0
+      - ENABLE_GUESTS=1
+      - ENABLE_LOBBY=0
+      - ENABLE_PREJOIN_PAGE=0
+      - ENABLE_WELCOME_PAGE=0
+      - TZ=${TIMEZONE}
+    volumes:
+      - ./data/jitsi/web:/config
+    networks:
+      - internal
+
+  jitsi-prosody:
+    image: jitsi/prosody:stable
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - CHOWN
+      - DAC_OVERRIDE
+    pids_limit: 100
+    environment:
+      - AUTH_TYPE=anonymous
+      - ENABLE_AUTH=0
+      - ENABLE_GUESTS=1
+      - ENABLE_LOBBY=0
+      - XMPP_DOMAIN=meet.jitsi
+      - XMPP_AUTH_DOMAIN=auth.meet.jitsi
+      - XMPP_MUC_DOMAIN=muc.meet.jitsi
+      - XMPP_INTERNAL_MUC_DOMAIN=internal-muc.meet.jitsi
+      - XMPP_GUEST_DOMAIN=guest.meet.jitsi
+      - XMPP_MUC_MODULES=
+      - JVB_AUTH_USER=jvb
+      - JVB_AUTH_PASSWORD=${JVB_AUTH_PASSWORD}
+      - JICOFO_AUTH_USER=focus
+      - JICOFO_AUTH_PASSWORD=${JICOFO_AUTH_PASSWORD}
+      - JICOFO_COMPONENT_SECRET=${JICOFO_COMPONENT_SECRET}
+      - TZ=${TIMEZONE}
+    volumes:
+      - ./data/jitsi/prosody/config:/config
+      - ./data/jitsi/prosody/prosody-plugins-custom:/prosody-plugins-custom
+    networks:
+      - internal
+
+  jitsi-jicofo:
+    image: jitsi/jicofo:stable
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - CHOWN
+      - FOWNER
+      - DAC_OVERRIDE
+    pids_limit: 100
+    environment:
+      - AUTH_TYPE=anonymous
+      - ENABLE_AUTH=0
+      - XMPP_SERVER=jitsi-prosody
+      - XMPP_DOMAIN=meet.jitsi
+      - XMPP_AUTH_DOMAIN=auth.meet.jitsi
+      - XMPP_MUC_DOMAIN=muc.meet.jitsi
+      - XMPP_INTERNAL_MUC_DOMAIN=internal-muc.meet.jitsi
+      - JICOFO_AUTH_USER=focus
+      - JICOFO_AUTH_PASSWORD=${JICOFO_AUTH_PASSWORD}
+      - JICOFO_COMPONENT_SECRET=${JICOFO_COMPONENT_SECRET}
+      - JVB_BREWERY_MUC=jvbbrewery
+      - TZ=${TIMEZONE}
+    volumes:
+      - ./data/jitsi/jicofo:/config
+    depends_on:
+      - jitsi-prosody
+    networks:
+      - internal
+
+  jitsi-jvb:
+    image: jitsi/jvb:stable
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - SETUID
+      - SETGID
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    pids_limit: 100
+    ports:
+      - "10000:10000/udp"
+    environment:
+      - DOCKER_HOST_ADDRESS=${SERVER_IP}
+      - XMPP_SERVER=jitsi-prosody
+      - XMPP_DOMAIN=meet.jitsi
+      - XMPP_AUTH_DOMAIN=auth.meet.jitsi
+      - XMPP_INTERNAL_MUC_DOMAIN=internal-muc.meet.jitsi
+      - JVB_AUTH_USER=jvb
+      - JVB_AUTH_PASSWORD=${JVB_AUTH_PASSWORD}
+      - JVB_BREWERY_MUC=jvbbrewery
+      - JVB_PORT=10000
+      - JVB_TCP_HARVESTER_DISABLED=true
+      - ENABLE_COLIBRI_WEBSOCKET=1
+      - JVB_WS_DOMAIN=${DOMAIN}
+      - JVB_WS_SERVER_ID=default-id
+      - TZ=${TIMEZONE}
+    volumes:
+      - ./data/jitsi/jvb:/config
+    depends_on:
+      - jitsi-prosody
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24

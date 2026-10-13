@@ -1,0 +1,8 @@
+.env
+data/
+nginx/certs/
+nginx/certs/*.pem
+nginx/certs/*.key
+*.pem
+*.key
+*.p12
